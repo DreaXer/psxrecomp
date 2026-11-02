@@ -706,6 +706,10 @@ struct RuntimeConfig {
     // [timing] guest_cycle_scale_batch: batch the scaled CPU charge like the
     // scale-1 path (psx_cyc.h). Same totals and observation points; opt-in.
     bool                  guest_cycle_scale_batch = false;
+    // [timing] gpu_draw_timing: charge GP0 rasterisation time (DuckStation
+    // per-command model, docs/GPU_DRAW_TIMING.md) so a busy GPU stalls the
+    // linked-list DMA and DrawSync. Off by default.
+    bool                  gpu_draw_timing = false;
     // guest_cycle_scale_gate: declarative RAM gate, judged at every VBlank;
     // the scale applies only while every predicate holds.
     struct GuestCycleScaleGatePred {

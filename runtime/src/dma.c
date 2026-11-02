@@ -794,13 +794,23 @@ static void gpu_ll_complete(void *opaque, int hit_limit) {
     complete_transfer(2);
 }
 
+/* GPU FIFO backpressure ([timing] gpu_draw_timing, gpu.c). Render passes run
+ * in frozen guest time and never wait. */
+extern uint32_t gpu_draw_timing_stall(uint32_t cycles_left);
+static uint32_t gpu_ll_stall(void *opaque, uint32_t cycles_left) {
+    (void)opaque;
+    if (g_psx_render_pass_active) return 0;
+    return gpu_draw_timing_stall(cycles_left);
+}
+
 static const DMAGPULinkedListOps gpu_ll_ops = {
     gpu_ll_resolve_address,
     gpu_ll_read_word,
     gpu_ll_observe_header,
     gpu_ll_begin_node,
     gpu_ll_emit_word,
-    gpu_ll_complete
+    gpu_ll_complete,
+    gpu_ll_stall
 };
 
 static void start_async_gpu_linked_list(void) {
@@ -864,6 +874,10 @@ static void hold_cpu_for_gpu_linked_list(void) {
     uint32_t steps = 0;
     while (gpu_linked_list.active && ((channels[2].chcr >> 24) & 1u) &&
            channel_enabled(2)) {
+        /* A full GPU FIFO drops the DMA request: the CPU runs while the GPU
+         * draws, and the walk resumes on its own deadline (Beetle RecalcHalt
+         * halts the CPU only while GPU DMA can write). */
+        if (gpu_linked_list.stalled) break;
         const uint32_t moved = gpu_linked_list.total_words;
         psx_advance_cycles(dma_gpu_ll_cycles_to_event(&gpu_linked_list));
         psx_devices_service_to_now();

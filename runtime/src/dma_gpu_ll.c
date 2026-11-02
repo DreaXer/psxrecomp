@@ -9,6 +9,8 @@
 #define DMA_GPU_LL_HEADER_CYCLES 1u
 #define DMA_GPU_LL_SETUP_CYCLES  0u
 
+uint32_t g_dma_gpu_ll_cycles_left = 0;
+
 static uint32_t resolve_address(const DMAGPULinkedListOps *ops, void *opaque,
                                 uint32_t address) {
     return ops->resolve_address ? ops->resolve_address(opaque, address) : address;
@@ -101,13 +103,27 @@ void dma_gpu_ll_advance(DMAGPULinkedList *state, uint32_t cycles,
             state->phase = DMA_GPU_LL_PHASE_PAYLOAD;
             state->cycles_remaining = 1u;
         } else if (state->phase == DMA_GPU_LL_PHASE_PAYLOAD) {
+            /* A busy GPU holds its FIFO full: the request drops and the word
+             * waits. The wait is not a transfer, so it moves no list word. */
+            if (state->emit_node && ops->stall) {
+                uint32_t wait = ops->stall(opaque, cycles);
+                if (wait) {
+                    state->stalled = 1u;
+                    state->cycles_remaining = wait;
+                    if (cycles == 0) return;
+                    continue;
+                }
+            }
+            state->stalled = 0u;
             uint32_t word_addr = resolve_address(
                 ops, opaque, state->current_addr + 4u +
                              state->payload_index * 4u);
             if (state->emit_node) {
                 uint32_t word = ops->read_word(opaque, word_addr);
+                g_dma_gpu_ll_cycles_left = cycles;
                 if (ops->emit_word)
                     ops->emit_word(opaque, word_addr, word);
+                g_dma_gpu_ll_cycles_left = 0;
             }
             state->payload_index++;
             state->total_words++;

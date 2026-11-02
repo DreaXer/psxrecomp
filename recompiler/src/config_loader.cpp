@@ -811,6 +811,8 @@ static RuntimeConfig parse_runtime_block(const toml::value& cfg, const fs::path&
             rt.guest_cycle_scale_gated = toml::find<bool>(tm, "guest_cycle_scale_gated");
         if (tm.contains("guest_cycle_scale_batch"))
             rt.guest_cycle_scale_batch = toml::find<bool>(tm, "guest_cycle_scale_batch");
+        if (tm.contains("gpu_draw_timing"))
+            rt.gpu_draw_timing = toml::find<bool>(tm, "gpu_draw_timing");
         // guest_cycle_scale_gate: one inline table or an array of them,
         // { addr, value, size = 4, mask = 0xFFFFFFFF }; all must hold.
         if (tm.contains("guest_cycle_scale_gate")) {

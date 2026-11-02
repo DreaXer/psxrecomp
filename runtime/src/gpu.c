@@ -15,6 +15,8 @@
 #include "mod_texture_banks.h"
 #include "display_scanout.h"
 #include "pgxp.h"
+#include "psx_cycles.h"
+#include "dma_gpu_ll.h"
 #include "mod_memory.h"
 #include "psx_memory.h"
 #include "gpu_primitive_reject.h"
@@ -4255,6 +4257,217 @@ void gpu_set_power_on_video_mode(int pal) {
     (void)psx_video_timing_set_pal((int)video_mode);
 }
 
+/* ---- GPU draw timing ([timing] gpu_draw_timing) ----
+ *
+ * GP0 commands still execute (and rasterise) the moment their last word
+ * arrives; this only charges the time the hardware GPU would spend on them,
+ * using DuckStation's per-command cost model (src/core/gpu.cpp
+ * AddDrawTriangleTicks / AddDrawRectangleTicks / AddDrawLineTicks, setup and
+ * fill/copy costs; see docs/GPU_DRAW_TIMING.md). The cost accumulates into a
+ * guest-cycle deadline. While the GPU is more than a run-ahead behind it, its
+ * FIFO is full: GPUSTAT bits 26/28 drop and the linked-list DMA waits
+ * (gpu_draw_timing_stall), so DrawSync blocks as it does on hardware.
+ * Off by default; guest-visible behaviour is unchanged when disabled. */
+static int      s_gpu_draw_timing = 0;
+static uint64_t s_gpu_busy_until = 0;       /* guest cycle the GPU goes idle */
+static uint64_t s_gpu_draw_ticks_total = 0; /* GPU ticks charged (diagnostic) */
+static uint64_t s_gpu_draw_stall_total = 0; /* DMA cycles stalled (diagnostic) */
+/* DuckStation GPUMaxRunAhead: commands keep being accepted while at most this
+ * much work is outstanding (128 GPU ticks = 64 guest cycles). */
+#define GPU_DRAW_RUN_AHEAD_CYCLES 64u
+
+void gpu_draw_timing_set_enabled(int enabled) {
+    s_gpu_draw_timing = enabled ? 1 : 0;
+    s_gpu_busy_until = 0;
+}
+
+int gpu_draw_timing_enabled(void) { return s_gpu_draw_timing; }
+
+void gpu_draw_timing_stats(uint64_t *ticks, uint64_t *stalled, int64_t *busy_ahead) {
+    if (ticks) *ticks = s_gpu_draw_ticks_total;
+    if (stalled) *stalled = s_gpu_draw_stall_total;
+    if (busy_ahead) *busy_ahead = (int64_t)(s_gpu_busy_until - psx_cycle_count);
+}
+
+/* The guest cycle a GP0 word is consumed at: inside a DMA advance the clock
+ * already sits at the end of the advance. */
+static uint64_t gpu_draw_now(void) {
+    return psx_cycle_count - g_dma_gpu_ll_cycles_left;
+}
+
+static uint64_t gpu_draw_ahead(uint64_t now) {
+    return s_gpu_busy_until > now ? s_gpu_busy_until - now : 0;
+}
+
+/* GPU ticks to guest cycles: the GPU draws two pixels per system clock. */
+static void gpu_draw_charge(uint32_t gpu_ticks) {
+    if (!s_gpu_draw_timing || gpu_ticks == 0) return;
+    const uint64_t now = gpu_draw_now();
+    const uint64_t start = s_gpu_busy_until > now ? s_gpu_busy_until : now;
+    s_gpu_busy_until = start + ((gpu_ticks + 1u) >> 1);
+    s_gpu_draw_ticks_total += gpu_ticks;
+}
+
+uint32_t gpu_draw_timing_stall(uint32_t cycles_left) {
+    if (!s_gpu_draw_timing) return 0;
+    const uint64_t ahead = gpu_draw_ahead(psx_cycle_count - cycles_left);
+    if (ahead <= GPU_DRAW_RUN_AHEAD_CYCLES) return 0;
+    const uint64_t wait = ahead - GPU_DRAW_RUN_AHEAD_CYCLES;
+    s_gpu_draw_stall_total += wait;
+    return wait > 0xFFFFFFFFull ? 0xFFFFFFFFu : (uint32_t)wait;
+}
+
+static int gpu_draw_idle(void) {
+    return !s_gpu_draw_timing || gpu_draw_ahead(psx_cycle_count) == 0;
+}
+
+static int gpu_draw_fifo_ready(void) {
+    return !s_gpu_draw_timing ||
+           gpu_draw_ahead(psx_cycle_count) <= GPU_DRAW_RUN_AHEAD_CYCLES;
+}
+
+static int32_t gpu_draw_coord(uint32_t v) { return ((int32_t)(v << 21)) >> 21; }
+
+/* Absolute vertex (11-bit signed + draw offset) clamped to the drawing area. */
+static void gpu_draw_vertex(uint32_t word, int32_t *x, int32_t *y) {
+    int32_t vx = gpu_draw_coord(word) + draw_offset_x;
+    int32_t vy = gpu_draw_coord(word >> 16) + draw_offset_y;
+    if (vx < (int32_t)draw_area_left) vx = (int32_t)draw_area_left;
+    if (vx > (int32_t)draw_area_right) vx = (int32_t)draw_area_right;
+    if (vy < (int32_t)draw_area_top) vy = (int32_t)draw_area_top;
+    if (vy > (int32_t)draw_area_bottom) vy = (int32_t)draw_area_bottom;
+    *x = vx;
+    *y = vy;
+}
+
+/* DuckStation GPUSTAT.SkipDrawingToActiveField: 480i drawing every other line. */
+static int gpu_draw_skips_field(void) {
+    return vertical_interlace && vres && !draw_to_display;
+}
+
+static uint32_t gpu_draw_triangle_ticks(const int32_t *x, const int32_t *y,
+                                        int textured, int semi) {
+    int64_t a = (int64_t)x[0] * y[1] + (int64_t)x[1] * y[2] + (int64_t)x[2] * y[0] -
+                (int64_t)x[0] * y[2] - (int64_t)x[1] * y[0] - (int64_t)x[2] * y[1];
+    uint32_t pixels = (uint32_t)((a < 0 ? -a : a) / 2);
+    if (textured) pixels += pixels;
+    if (semi || check_mask_bit) pixels += (pixels + 1u) / 2u;
+    if (gpu_draw_skips_field()) pixels /= 2u;
+    return pixels;
+}
+
+static uint32_t gpu_draw_rect_extent(int32_t lo, int32_t len, int32_t clip_lo,
+                                     int32_t clip_hi) {
+    int32_t a = lo > clip_lo ? lo : clip_lo;
+    int32_t b = lo + len - 1 < clip_hi ? lo + len - 1 : clip_hi;
+    return b >= a ? (uint32_t)(b - a + 1) : 0u;
+}
+
+static uint32_t gpu_draw_line_ticks(uint32_t w0, uint32_t w1) {
+    int32_t x[2], y[2];
+    gpu_draw_vertex(w0, &x[0], &y[0]);
+    gpu_draw_vertex(w1, &x[1], &y[1]);
+    uint32_t w = (uint32_t)(x[0] > x[1] ? x[0] - x[1] : x[1] - x[0]);
+    uint32_t h = (uint32_t)(y[0] > y[1] ? y[0] - y[1] : y[1] - y[0]);
+    if (gpu_draw_skips_field()) h = h / 2u ? h / 2u : 1u;
+    return w > h ? w : h;
+}
+
+/* One poly-line segment between absolute (offset-applied) endpoints. */
+static void gpu_draw_charge_segment(int32_t x0, int32_t y0, int32_t x1, int32_t y1) {
+    if (!s_gpu_draw_timing) return;
+    const int32_t l = (int32_t)draw_area_left, r = (int32_t)draw_area_right;
+    const int32_t t = (int32_t)draw_area_top, b = (int32_t)draw_area_bottom;
+    x0 = x0 < l ? l : (x0 > r ? r : x0);
+    x1 = x1 < l ? l : (x1 > r ? r : x1);
+    y0 = y0 < t ? t : (y0 > b ? b : y0);
+    y1 = y1 < t ? t : (y1 > b ? b : y1);
+    uint32_t w = (uint32_t)(x0 > x1 ? x0 - x1 : x1 - x0);
+    uint32_t h = (uint32_t)(y0 > y1 ? y0 - y1 : y1 - y0);
+    if (gpu_draw_skips_field()) h = h / 2u ? h / 2u : 1u;
+    gpu_draw_charge(w > h ? w : h);
+}
+
+/* Cost of the complete fixed-length GP0 command in buf. */
+static uint32_t gpu_draw_command_ticks(const uint32_t *buf) {
+    const uint32_t op = buf[0] >> 24;
+    if (op >= 0x20 && op <= 0x3F) {
+        static const uint16_t setup[2][2][2] = {
+            {{46, 226}, {334, 496}}, {{82, 262}, {370, 532}}};
+        const int quad = (op & 0x08) != 0, shaded = (op & 0x10) != 0;
+        const int textured = (op & 0x04) != 0, semi = (op & 0x02) != 0;
+        int32_t x[4], y[4];
+        uint32_t idx = 1;
+        for (int i = 0; i < (quad ? 4 : 3); i++) {
+            if (shaded && i > 0) idx++;
+            gpu_draw_vertex(buf[idx++], &x[i], &y[i]);
+            if (textured) idx++;
+        }
+        uint32_t ticks = setup[quad][shaded][textured];
+        ticks += gpu_draw_triangle_ticks(x, y, textured, semi);
+        if (quad) {
+            const int32_t qx[3] = { x[2], x[1], x[3] };
+            const int32_t qy[3] = { y[2], y[1], y[3] };
+            ticks += gpu_draw_triangle_ticks(qx, qy, textured, semi);
+        }
+        return ticks;
+    }
+    if (op >= 0x40 && op <= 0x5F)          /* fixed two-point line */
+        return 16u + gpu_draw_line_ticks(buf[1], buf[(op & 0x10) ? 3 : 2]);
+    if (op >= 0x60 && op <= 0x7F) {
+        const int textured = (op & 0x04) != 0, semi = (op & 0x02) != 0;
+        int32_t w, h;
+        switch ((op >> 3) & 3u) {
+            case 0: {
+                const uint32_t s = buf[textured ? 3 : 2];
+                w = (int32_t)(s & 0x3FFu);
+                h = (int32_t)((s >> 16) & 0x1FFu);
+                break;
+            }
+            case 1: w = h = 1; break;
+            case 2: w = h = 8; break;
+            default: w = h = 16; break;
+        }
+        const int32_t x = gpu_draw_coord(buf[1]) + draw_offset_x;
+        const int32_t y = gpu_draw_coord(buf[1] >> 16) + draw_offset_y;
+        const uint32_t dw = gpu_draw_rect_extent(x, w, (int32_t)draw_area_left,
+                                                 (int32_t)draw_area_right);
+        uint32_t dh = gpu_draw_rect_extent(y, h, (int32_t)draw_area_top,
+                                           (int32_t)draw_area_bottom);
+        uint32_t per_row = dw;
+        if (textured) {
+            switch (texpage_colors) {
+                case 0: per_row += dw; break;            /* 4-bit CLUT */
+                case 1:                                  /* 8-bit CLUT */
+                    if (dw > 128) per_row += (dw / 4u) * 8u;
+                    else if (dw && dw * dh > 2048) per_row += (dw / 4u) * (4u * (128u / dw));
+                    else per_row += dw;
+                    break;
+                default:                                 /* 15-bit direct */
+                    if (dw > 128) per_row += (dw / 2u) * 8u;
+                    else if (dw && dw * dh > 1024) per_row += (dw / 4u) * (8u * (128u / dw));
+                    else per_row += dw;
+                    break;
+            }
+        }
+        if (semi || check_mask_bit) per_row += (dw + 1u) / 2u;
+        if (gpu_draw_skips_field()) dh = dh / 2u ? dh / 2u : 1u;
+        return 16u + per_row * dh;
+    }
+    if (op == 0x02) {                      /* fill rectangle */
+        const uint32_t w = ((buf[2] & 0x3FFu) + 0xFu) & ~0xFu;
+        const uint32_t h = (buf[2] >> 16) & 0x1FFu;
+        return 46u + ((w / 8u) + 9u) * h;
+    }
+    if (op >= 0x80 && op <= 0x9F) {        /* VRAM to VRAM copy */
+        uint32_t w = buf[3] & 0x3FFu, h = (buf[3] >> 16) & 0x1FFu;
+        if (!w) w = 0x400u;
+        if (!h) h = 0x200u;
+        return w * h * 2u;
+    }
+    return 1u;                             /* environment / misc */
+}
+
 /* ---- GPUSTAT read (0x1F801814) ---- */
 
 uint32_t gpu_read_gpustat(void) {
@@ -4327,20 +4540,23 @@ uint32_t gpu_read_gpustat(void) {
      */
     switch (dma_direction) {
         case 0: break; /* bit 25 = 0 */
-        case 1: stat |= (1u << 25); break;
-        case 2: stat |= (1u << 25); break; /* mirrors ready-to-receive */
+        case 1: if (gpu_draw_fifo_ready()) stat |= (1u << 25); break;
+        case 2: if (gpu_draw_fifo_ready()) stat |= (1u << 25); break; /* mirrors ready-to-receive */
         case 3: stat |= (1u << 25); break; /* mirrors ready-to-send */
     }
 
-    /* Bit 26: ready to receive cmd word — 1 when not busy */
-    stat |= (1u << 26);
+    /* Bit 26: ready to receive cmd word — 1 when not busy. With draw timing
+     * the GPU is busy until its charged work is done. */
+    if (gpu_draw_idle())
+        stat |= (1u << 26);
 
     /* Bit 27: ready to send VRAM to CPU — 1 when VRAM read is active */
     if (vram_read_active)
         stat |= (1u << 27);
 
-    /* Bit 28: ready to receive DMA block — 1 when not busy */
-    stat |= (1u << 28);
+    /* Bit 28: ready to receive DMA block — 1 while the FIFO has room */
+    if (gpu_draw_fifo_ready())
+        stat |= (1u << 28);
 
     /* Bits 29-30: DMA direction */
     stat |= (dma_direction & 3) << 29;
@@ -7605,6 +7821,8 @@ static void gp0_execute_command(void) {
     uint8_t opcode = (gp0_cmd_buf[0] >> 24) & 0xFF;
     gp0_opcode_count[opcode]++;
     gp0_ring_record(gp0_cmd_buf, gp0_words_needed);
+    if (s_gpu_draw_timing)
+        gpu_draw_charge(gpu_draw_command_ticks(gp0_cmd_buf));
     extern void ws_bg_phase_note(uint32_t op);
     ws_bg_phase_note(opcode);   /* native-wide 2D-backdrop stretch: background-phase latch */
     if (ws_view_camera_addr || ws_view_manual || g_bg2d_host_size) {
@@ -7946,6 +8164,7 @@ static void gpu_write_gp0_body(uint32_t val) {
         if (polyline_has_prev &&
             !psx_gpu_line_oversize(polyline_prev_x, polyline_prev_y, x, y)) {
             gr_draw_line(polyline_prev_x, polyline_prev_y, x, y, polyline_color);
+            gpu_draw_charge_segment(polyline_prev_x, polyline_prev_y, x, y);
         }
         polyline_prev_x = x; polyline_prev_y = y;
         if (polyline_has_prev < 2) polyline_has_prev++;
@@ -7988,9 +8207,11 @@ static void gpu_write_gp0_body(uint32_t val) {
             int32_t x, y;
             parse_vertex(val, &x, &y);
             x += draw_offset_x; y += draw_offset_y;
-            if (!psx_gpu_line_oversize(polyline_prev_x, polyline_prev_y, x, y))
+            if (!psx_gpu_line_oversize(polyline_prev_x, polyline_prev_y, x, y)) {
                 gr_draw_shaded_line(polyline_prev_x, polyline_prev_y,
                                     polyline_prev_c, x, y, polyline_color);
+                gpu_draw_charge_segment(polyline_prev_x, polyline_prev_y, x, y);
+            }
             polyline_prev_x = x; polyline_prev_y = y;
             polyline_prev_c = polyline_color;
             polyline_has_prev = 3;
@@ -8032,6 +8253,7 @@ static void gpu_write_gp0_body(uint32_t val) {
         polyline_has_prev = 0;
         gr_set_semi_transparency(polyline_semi_trans, (int)semi_transparency);
         gp0_state = shaded ? GP0_POLYLINE_SHADED : GP0_POLYLINE_MONO;
+        gpu_draw_charge(16u);   /* poly-line setup (DuckStation) */
         gp0_draw_count++;
         /* Record polyline header (variable-length body not captured;
          * just enough so per-frame stream shows the polyline existed). */
@@ -8074,6 +8296,7 @@ static void gp1_reset(void) {
      * VRAM contents survive a GPU reset on real hardware; only power-on init
      * clears our backing store. */
     gpu_reset_state(0);
+    s_gpu_busy_until = 0;   /* a reset aborts the drawing in progress */
 }
 
 static void gp1_reset_command_buffer(void) {
@@ -8083,6 +8306,7 @@ static void gp1_reset_command_buffer(void) {
     gp0_words_collected = 0;
     gp0_words_needed = 0;
     vram_write_remaining = 0;
+    s_gpu_busy_until = 0;
 }
 
 static void gp1_ack_irq1(void) {

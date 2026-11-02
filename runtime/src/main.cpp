@@ -63,6 +63,7 @@ extern "C" int g_psx_track_last_store;
 extern "C" uint32_t g_guest_last_store_addr, g_guest_last_store_val;
 #include "overlay_backend.h"
 #include "gpu.h"
+extern "C" void gpu_draw_timing_set_enabled(int enabled); /* gpu.c, [timing] gpu_draw_timing */
 #include "draw_distance.h"
 #include "mod_immediate.h"
 #include "display_scanout.h"
@@ -18059,6 +18060,12 @@ int main(int argc, char** argv) {
                 extern int g_psx_gcs_batch;
                 const char *gb = getenv("PSX_GCS_BATCH");
                 g_psx_gcs_batch = gb ? (gb[0] == '1') : (gc.runtime.guest_cycle_scale_batch ? 1 : 0);
+            }
+            {
+                /* [timing] gpu_draw_timing; PSX_GPU_DRAW_TIMING=0/1 overrides
+                 * it for A/B testing only. */
+                const char *gt = getenv("PSX_GPU_DRAW_TIMING");
+                gpu_draw_timing_set_enabled(gt ? (gt[0] == '1') : (gc.runtime.gpu_draw_timing ? 1 : 0));
             }
             psx_guest_cycle_scale_ram_gate_clear();
             psx_guest_cycle_scale_set_ram_reader(gcs_gate_read_ram);

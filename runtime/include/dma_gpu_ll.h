@@ -19,6 +19,7 @@ typedef struct {
     uint8_t phase;
     uint8_t emit_node;
     uint8_t hit_limit;
+    uint8_t stalled;        /* waiting for GPU FIFO room; not savestate payload */
     uint32_t start_addr;
     uint32_t current_addr;
     uint32_t next_addr;
@@ -38,7 +39,16 @@ typedef struct {
     int (*begin_node)(void *opaque, uint32_t address, uint32_t word_count);
     void (*emit_word)(void *opaque, uint32_t address, uint32_t word);
     void (*complete)(void *opaque, int hit_limit);
+    /* Optional GPU FIFO backpressure: guest cycles the next payload word must
+     * wait, given the cycles of this advance still unconsumed (the walker runs
+     * after the clock has moved to the end of the advance). 0 = send now. */
+    uint32_t (*stall)(void *opaque, uint32_t cycles_left);
 } DMAGPULinkedListOps;
+
+/* Cycles of the current dma_gpu_ll_advance still unconsumed while a payload
+ * word is emitted (0 outside an advance), so the receiver can place the word
+ * at psx_cycle_count - g_dma_gpu_ll_cycles_left. */
+extern uint32_t g_dma_gpu_ll_cycles_left;
 
 void dma_gpu_ll_start(DMAGPULinkedList *state, uint32_t start_addr,
                       uint32_t max_nodes);
