@@ -3278,6 +3278,27 @@ static void ws_expand_fullscreen_rect(int32_t *x, int32_t y, int *w, int h) {
     }
 }
 
+/* Semi-transparent fades are also authored as full-width Gouraud bands that
+ * split the screen (Power Rangers Lightspeed Rescue's pause fade: two G4
+ * halves, 0..512 x 0..128 and 128..256). Neither half covers the complete
+ * display, so ws_expand_fullscreen_rect never sees them and the revealed side
+ * bands stay unfaded. In native-wide mode, widen an axis-aligned semi band
+ * that spans the full native width by the reveal on each side; its corner
+ * colours move with their corners, so a vertical gradient is preserved. */
+static void ws_expand_fullwidth_semi_quad(int32_t *vx, const int32_t *vy) {
+    if (!ws_native_wide_active()) return;
+    if (vx[0] != vx[2] || vx[1] != vx[3] || vy[0] != vy[1] || vy[2] != vy[3])
+        return;
+    int X = (int)ws_disp_x(), W = (int)ws_disp_w();
+    int left = vx[0] < vx[1] ? 0 : 1;
+    if (vx[left] > X || vx[left ^ 1] < X + W) return;
+    int off = ws_nw_offset();
+    vx[left] -= off;
+    vx[left + 2] -= off;
+    vx[left ^ 1] += off;
+    vx[(left ^ 1) + 2] += off;
+}
+
 /* In-game HUD pivot for an untagged screen-space SPRT spanning [x, x+w).
  * Only reached during gameplay (ws_active true). HUD elements are sparse and
  * corner-anchored, so pivot by thirds: outer-third elements anchor to their
@@ -5605,6 +5626,7 @@ static void gp0_exec_shaded_quad(void) {
         ws_auto_ui_transform_quad(vx, vy);
         ws_nw_backdrop_stretch_quad(vx, vy);
         ws_nw_hud_shift_vertices(vx, 4);
+        if (semi_trans) ws_expand_fullwidth_semi_quad(vx, vy);
     }
     for (int i = 0; i < 4; i++) {
         vx[i] += draw_offset_x;
