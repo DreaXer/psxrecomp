@@ -655,6 +655,20 @@ int psx_mod_set_native_vblank_rate(uint32_t frames_per_second);
  */
 int psx_mod_set_frame_interpolation(uint32_t frames_per_second);
 /*
+ * Turn on Smooth motion (docs/FRAME_GENERATION.md): the OpenGL render thread
+ * draws in-between frames from the recorded scene between the game's real
+ * frames, up to the display refresh and only from measured surplus. Guest
+ * timing is unchanged. Call from activation: it selects OpenGL and the render
+ * thread, which start once per launch. If the render thread already runs it
+ * switches generation on live; if it was never started it applies from the
+ * next launch. Every session start restores the pre-mod setting.
+ */
+enum {
+    PSX_MOD_SMOOTH_MOTION_REDRAW = 0,        /* redraw the scene (default) */
+    PSX_MOD_SMOOTH_MOTION_REPROJECTION = 1   /* warp the image (R4-tuned) */
+};
+int psx_mod_set_smooth_motion(uint32_t method);
+/*
  * Choose how the OpenGL presenter combines completed frames. Linear is a
  * full-frame crossfade. Motion-adaptive retains temporal blending for
  * small temporal changes but switches large changes cleanly to reduce the

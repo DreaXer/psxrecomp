@@ -28,6 +28,13 @@ allocated: no snapshots, depth image, warp programs, HUD matching, per-frame
 `getenv` or uniform lookups. Switching to `redraw` (or Smooth motion off)
 frees what reprojection held.
 
+A trusted title plugin can turn it on from its mod catalog with
+`psx_mod_set_smooth_motion(PSX_MOD_SMOOTH_MOTION_REDRAW)` (or `_REPROJECTION`)
+in an activation callback: it selects OpenGL and the render thread before the
+renderer starts, switches generation on live if the render thread already
+runs, and every session start restores the pre-mod setting. Power Rangers
+Lightspeed Rescue's `prlr.enhancement.smooth-motion` package is the first user.
+
 ## Rule
 
 Real frames at the guest's rate come first and resolution is the only

@@ -225,6 +225,14 @@ extern "C" void psx_game_codegen_forward_if_built(int argc, char** argv);
 #include <windows.h>
 #include <commdlg.h>
 #include "psx_win_utf8.h"
+/* Hybrid-GPU laptops: ask the NVIDIA Optimus / AMD switchable-graphics
+ * drivers for the discrete GPU. Without these exports the OpenGL context
+ * lands on the integrated GPU (measured: Intel UHD at ~10 ms per frame where
+ * the render thread's Smooth motion then finds no surplus). */
+extern "C" {
+__declspec(dllexport) DWORD NvOptimusEnablement = 1;
+__declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
+}
 #else
 #include <arpa/inet.h>
 #include <fcntl.h>
@@ -1618,6 +1626,13 @@ static int           g_present_thread_pref = 0;
 static int           g_frame_generation_pref = 0;
 static int           g_present_thread_slots = 3;
 static int           s_render_thread_tried = 0;
+/* psx_mod_set_smooth_motion: a mod session turned Smooth motion on. The
+ * pre-mod render thread / frame generation / method are kept so the next
+ * session can restore them (the render thread itself cannot stop). */
+static bool          g_mod_smooth_motion = false;
+static int           g_smooth_motion_base_render_thread = -1;
+static int           g_smooth_motion_base_frame_generation = 0;
+static int           g_smooth_motion_base_method = 0;
 static int           g_video_vsync        = 1;
 static int           g_frame_interpolation = 0;
 static int           g_frame_interpolation_fps = 0;
@@ -1887,6 +1902,18 @@ static void reset_mod_owned_presentation(void) {
     g_frame_period_ms = live.frame_period_ms;
     g_mod_native_vblank_rate = false;
     g_mod_native_vblank_fps = 0;
+    if (g_mod_smooth_motion) {
+        /* A started render thread keeps running; only generation follows. */
+        g_mod_smooth_motion = false;
+        if (!s_render_thread_tried)
+            g_render_thread = g_smooth_motion_base_render_thread;
+        g_frame_generation = g_smooth_motion_base_frame_generation;
+        g_frame_generation_method = g_smooth_motion_base_method;
+        if (s_render_thread_tried) {
+            gl_renderer_set_frame_generation_method(g_frame_generation_method);
+            gl_renderer_set_frame_generation(g_frame_generation);
+        }
+    }
     g_mod_texfilter = -1;
     gr_set_texture_filter(g_video_texfilter);
     if (!first) {
@@ -2008,6 +2035,43 @@ extern "C" int psx_mod_set_frame_interpolation(
             "psxrecomp: mod selected display-refresh presentation-only temporal "
             "blending; guest timing remains stock (no motion vectors)\n");
     }
+    return 1;
+}
+
+extern "C" int psx_mod_set_smooth_motion(uint32_t method) {
+    if (method != PSX_MOD_SMOOTH_MOTION_REDRAW &&
+        method != PSX_MOD_SMOOTH_MOTION_REPROJECTION) {
+        std::fprintf(stderr,
+            "psxrecomp: mod rejected invalid Smooth motion method %u\n",
+            (unsigned)method);
+        return 0;
+    }
+    if (!g_mod_smooth_motion) {
+        g_smooth_motion_base_render_thread = g_render_thread;
+        g_smooth_motion_base_frame_generation = g_frame_generation;
+        g_smooth_motion_base_method = g_frame_generation_method;
+    }
+    g_mod_smooth_motion = true;
+    g_frame_generation = 1;
+    g_frame_generation_method = method == PSX_MOD_SMOOTH_MOTION_REPROJECTION
+        ? GL_FG_METHOD_REPROJECTION : GL_FG_METHOD_REDRAW;
+    if (!s_render_thread_tried) {
+        /* Mods activate before the window and renderer exist: select the
+         * OpenGL render thread it needs, as the launcher row would. */
+        g_video_renderer = 1;
+        g_render_thread = 1;
+    } else if (g_render_thread) {
+        gl_renderer_set_frame_generation_method(g_frame_generation_method);
+        gl_renderer_set_frame_generation(1);
+    } else {
+        std::fprintf(stdout,
+            "psxrecomp: Smooth motion needs the render thread, which starts "
+            "only at launch; it applies from the next launch\n");
+    }
+    std::fprintf(stdout,
+        "psxrecomp: mod selected Smooth motion (frame generation, %s); "
+        "guest timing remains stock\n",
+        method == PSX_MOD_SMOOTH_MOTION_REPROJECTION ? "reprojection" : "redraw");
     return 1;
 }
 
