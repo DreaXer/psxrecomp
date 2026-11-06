@@ -70,6 +70,8 @@ typedef struct PsxHostLook {
     int texture_filter;         /* PSX_TEXTURE_FILTER_* (video_texture_filter.h) */
     int fmv_filter;             /* VIDEO_FMV_FILTER_* (config value) */
     int spu_hq;                 /* [audio] spu_hq: SPU float shadow 0/1 */
+    int dithering;              /* [video] dithering: 0 off, 1 on, 2 fine */
+    int fmv_chroma;             /* [video] fmv_chroma_smoothing 0/1 */
 } PsxHostLook;
 
 /* This session's requests: zero-initialized (reset) means no mod enabled. */
@@ -82,6 +84,8 @@ typedef struct PsxHostEnhRequests {
     int image_smoothing;        /* PSX_HOST_ENH_DEFAULT, 0 sharp or 1 smooth */
     int image_texture_filter;   /* PSX_HOST_ENH_DEFAULT or PSX_TEXTURE_FILTER_* */
     int image_fmv_filter;       /* PSX_HOST_ENH_DEFAULT or VIDEO_FMV_FILTER_* */
+    int image_dithering;        /* PSX_HOST_ENH_DEFAULT, 0 off, 1 on or 2 fine */
+    int image_fmv_chroma;       /* PSX_HOST_ENH_DEFAULT, 0 or 1 */
     int audio;                  /* Enhanced Audio enabled */
     int rewind;                 /* Rewind enabled */
     int rewind_depth;           /* 50 / 100 / 150 / 200 */
@@ -128,6 +132,10 @@ static inline PsxHostLook psx_host_enh_resolve(const PsxHostLook* baseline,
             out.texture_filter = req->image_texture_filter;
         if (req->image_fmv_filter != PSX_HOST_ENH_DEFAULT)
             out.fmv_filter = req->image_fmv_filter;
+        if (req->image_dithering != PSX_HOST_ENH_DEFAULT)
+            out.dithering = req->image_dithering;
+        if (req->image_fmv_chroma != PSX_HOST_ENH_DEFAULT)
+            out.fmv_chroma = req->image_fmv_chroma ? 1 : 0;
     }
     if (req->audio) out.spu_hq = 1;
     return out;
@@ -159,7 +167,8 @@ void psx_host_enh_reset(void);
  * the encodings above; out-of-range values are clamped to the option default
  * by the parsers below before they get here. */
 void psx_host_enh_request_crt(int screen_kind, int scanlines, int strength_pct);
-void psx_host_enh_request_image(int smoothing, int texture_filter, int fmv_filter);
+void psx_host_enh_request_image(int smoothing, int texture_filter, int fmv_filter,
+                                int dithering, int fmv_chroma);
 void psx_host_enh_request_audio(void);
 void psx_host_enh_request_rewind(int depth, int interval);
 void psx_host_enh_request_resolution(int value);
@@ -191,6 +200,7 @@ int psx_host_enh_parse_strength(const char* text);      /* "1".."100" */
 int psx_host_enh_parse_smoothing(const char* text);     /* default smooth sharp */
 int psx_host_enh_parse_texture_filter(const char* text);/* default nearest bilinear xbr */
 int psx_host_enh_parse_fmv_filter(const char* text);    /* default nearest bilinear sharp bicubic */
+int psx_host_enh_parse_dithering(const char* text);     /* default on fine off */
 int psx_host_enh_parse_rewind_depth(const char* text);  /* "50" "100" "150" "200" */
 int psx_host_enh_parse_rewind_interval(const char* text);/* "1" "4" "8" "12" "15" */
 /* "default" -> PSX_IR_UNSET; fixed 1x..32x and legacy height ids are retained.

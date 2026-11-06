@@ -5,10 +5,11 @@ uint32_t g_psx_hblank_cycles   = PSX_HBLANK_CYCLES_NTSC;
 uint32_t g_psx_lines_per_frame = PSX_LINES_PER_FRAME_NTSC;
 
 static int      s_pal;
+static int      s_requested_pal;
+static int      s_force_ntsc;
 static uint32_t s_generation;
 
-int psx_video_timing_set_pal(int pal) {
-    pal = pal ? 1 : 0;
+static int apply_pal(int pal) {
     if (pal == s_pal)
         return 0;
     s_pal = pal;
@@ -17,6 +18,16 @@ int psx_video_timing_set_pal(int pal) {
     g_psx_lines_per_frame = pal ? PSX_LINES_PER_FRAME_PAL : PSX_LINES_PER_FRAME_NTSC;
     s_generation++;
     return 1;
+}
+
+int psx_video_timing_set_pal(int pal) {
+    s_requested_pal = pal ? 1 : 0;
+    return apply_pal(s_requested_pal && !s_force_ntsc);
+}
+
+int psx_video_timing_force_ntsc(int on) {
+    s_force_ntsc = on ? 1 : 0;
+    return apply_pal(s_requested_pal && !s_force_ntsc);
 }
 
 int psx_video_timing_is_pal(void) {

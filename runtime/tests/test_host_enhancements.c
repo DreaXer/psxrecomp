@@ -177,6 +177,8 @@ static void test_resolve(void) {
     req.image_smoothing = PSX_HOST_ENH_DEFAULT;
     req.image_texture_filter = PSX_HOST_ENH_DEFAULT;
     req.image_fmv_filter = PSX_HOST_ENH_DEFAULT;
+    req.image_dithering = PSX_HOST_ENH_DEFAULT;
+    req.image_fmv_chroma = PSX_HOST_ENH_DEFAULT;
     out = psx_host_enh_resolve(&base, &req);
     CHECK(!memcmp(&out, &base, sizeof out));   /* all Game default: the baseline */
 
@@ -185,11 +187,14 @@ static void test_resolve(void) {
     req.image_smoothing = 1;
     req.image_texture_filter = PSX_TEXTURE_FILTER_XBR;
     req.image_fmv_filter = 3;
+    req.image_dithering = 2;
+    req.image_fmv_chroma = 1;
     req.audio = 1;
     out = psx_host_enh_resolve(&base, &req);
     CHECK(out.screen_kind == 3 && out.scanlines == 1 && out.scanline_strength_pct == 80);
     CHECK(out.present_linear == 1 && out.texture_filter == PSX_TEXTURE_FILTER_XBR);
     CHECK(out.fmv_filter == 3 && out.spu_hq == 1);
+    CHECK(out.dithering == 2 && out.fmv_chroma == 1);
 
     /* Scanlines Off: the strength is irrelevant and the title's is kept. */
     req.crt_scanlines = 0;
@@ -231,6 +236,9 @@ static void test_parsers(void) {
     CHECK(psx_host_enh_parse_texture_filter("stable") == PSX_HOST_ENH_DEFAULT);
     CHECK(psx_host_enh_parse_fmv_filter("nearest") == 0 && psx_host_enh_parse_fmv_filter("bilinear") == 1);
     CHECK(psx_host_enh_parse_fmv_filter("sharp") == 2 && psx_host_enh_parse_fmv_filter("bicubic") == 3);
+    CHECK(psx_host_enh_parse_dithering("off") == 0 && psx_host_enh_parse_dithering("on") == 1);
+    CHECK(psx_host_enh_parse_dithering("fine") == 2 &&
+          psx_host_enh_parse_dithering("default") == PSX_HOST_ENH_DEFAULT);
     CHECK(psx_host_enh_parse_rewind_depth("150") == 150 && psx_host_enh_parse_rewind_depth("75") == 50);
     CHECK(psx_host_enh_parse_rewind_interval("4") == 4 && psx_host_enh_parse_rewind_interval("5") == 15);
 }
@@ -252,7 +260,9 @@ static void test_plugins(void) {
           req.crt_scanlines == PSX_HOST_ENH_DEFAULT && req.crt_strength_pct == 50);
     CHECK(req.image && req.image_smoothing == PSX_HOST_ENH_DEFAULT &&
           req.image_texture_filter == PSX_HOST_ENH_DEFAULT &&
-          req.image_fmv_filter == PSX_HOST_ENH_DEFAULT);
+          req.image_fmv_filter == PSX_HOST_ENH_DEFAULT &&
+          req.image_dithering == PSX_HOST_ENH_DEFAULT &&
+          req.image_fmv_chroma == PSX_HOST_ENH_DEFAULT);
     CHECK(req.audio);
     CHECK(req.rewind && req.rewind_depth == 50 && req.rewind_interval == 15);
 
@@ -263,6 +273,8 @@ static void test_plugins(void) {
     set_opt(IMG, "image-filtering", "smoothing", "sharp");
     set_opt(IMG, "image-filtering", "texture_filtering", "bilinear");
     set_opt(IMG, "image-filtering", "fmv_filtering", "bicubic");
+    set_opt(IMG, "image-filtering", "dithering", "off");
+    set_opt(IMG, "image-filtering", "fmv_chroma_smoothing", "on");
     set_opt(RWD, "rewind", "buffer", "200");
     set_opt(RWD, "rewind", "interval", "1");
     psx_host_enh_reset();
@@ -272,7 +284,7 @@ static void test_plugins(void) {
     psx_host_enh_requests(&req);
     CHECK(req.crt_screen_kind == 3 && req.crt_scanlines == 1 && req.crt_strength_pct == 35);
     CHECK(req.image_smoothing == 0 && req.image_texture_filter == PSX_TEXTURE_FILTER_BILINEAR &&
-          req.image_fmv_filter == 3);
+          req.image_fmv_filter == 3 && req.image_dithering == 0 && req.image_fmv_chroma == 1);
     CHECK(!req.audio);   /* not activated this session */
     CHECK(req.rewind_depth == 200 && req.rewind_interval == 1);
 

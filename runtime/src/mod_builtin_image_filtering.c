@@ -4,7 +4,8 @@
  * How the host scales and samples the picture -- the present-time smoothing
  * (linear vs nearest, the title's [video] antialiasing), texture filtering
  * (nearest / bilinear / xBR, [video] texture_filtering) and FMV
- * reconstruction ([video] fmv_filter) -- is a property of the host renderer,
+ * reconstruction ([video] fmv_filter), dithering ([video] dithering) and FMV
+ * chroma smoothing ([video] fmv_chroma_smoothing) -- is a property of the host renderer,
  * not of any particular disc, so it ships here and mods/builtin/packages/
  * psx.enhancement.image-filtering targets game_id "*". Default off: the
  * title's [video] keys stay its baseline, and an option left at "Game
@@ -27,13 +28,17 @@ static void image_option(const char* id, char* out, unsigned size) {
 }
 
 static void image_request(void) {
-    char smoothing[16], texture[16], fmv[16];
+    char smoothing[16], texture[16], fmv[16], dither[16], chroma[16];
     image_option("smoothing", smoothing, sizeof smoothing);
     image_option("texture_filtering", texture, sizeof texture);
     image_option("fmv_filtering", fmv, sizeof fmv);
+    image_option("dithering", dither, sizeof dither);
+    image_option("fmv_chroma_smoothing", chroma, sizeof chroma);
     psx_host_enh_request_image(psx_host_enh_parse_smoothing(smoothing),
                                psx_host_enh_parse_texture_filter(texture),
-                               psx_host_enh_parse_fmv_filter(fmv));
+                               psx_host_enh_parse_fmv_filter(fmv),
+                               psx_host_enh_parse_dithering(dither),
+                               psx_host_enh_parse_tristate(chroma));
 }
 
 static void builtin_image_filtering_activate(void) {

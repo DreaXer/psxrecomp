@@ -1515,7 +1515,7 @@ static int           g_rewind_interval = 15; /* frames between snaps (1/4/8/12/1
  * [audio] spu_hq, captured when the config loads. The CRT Filter, Image
  * Filtering and Enhanced Audio mods resolve over it at every session start
  * (session_host_look); with them off it is exactly what the title ships. */
-static PsxHostLook   g_title_look = {0, 0, 50, 1, 0, 0, 0};
+static PsxHostLook   g_title_look = {0, 0, 50, 1, 0, 0, 0, 1, 0};
 static int           g_hotkey_pad_rewind = 1272;       /* select + r3 */
 static int           g_hotkey_pad_save_state_menu = 2040;/* select + r1 */
 static int           g_hotkey_pad_fast_forward = 1528;   /* select + l1 (hold) */
@@ -10512,6 +10512,8 @@ static void session_host_look(void) {
     g_video_aa = look.present_linear != 0;
     g_video_texfilter = look.texture_filter;
     g_video_fmv_filter = look.fmv_filter;
+    g_video_dithering = look.dithering;
+    g_video_fmv_chroma = look.fmv_chroma;
     g_audio_spu_hq = look.spu_hq != 0;
     g_rewind_enabled = req.rewind ? 1 : 0;
     g_rewind_depth = req.rewind ? req.rewind_depth : PSX_HOST_ENH_REWIND_DEPTH_DEFAULT;
@@ -10537,6 +10539,12 @@ static void host_look_apply_live(void) {
     if (g_mod_texfilter < 0) gr_set_texture_filter(g_video_texfilter);
     g_video_fmv_filter = look.fmv_filter;
     if (g_gl_active) gl_renderer_set_fmv_filter(g_video_fmv_filter);
+    g_video_dithering = look.dithering;
+    g_video_fmv_chroma = look.fmv_chroma;
+    if (g_gl_active) {
+        gl_renderer_set_dithering(g_video_dithering);
+        gl_renderer_set_fmv_chroma_smoothing(g_video_fmv_chroma);
+    }
 }
 
 /* ---- The session's internal resolution (host_enhancements.h) ------------
@@ -18430,6 +18438,8 @@ int main(int argc, char** argv) {
             g_title_look.texture_filter = gc.runtime.video_texture_filter;
             g_title_look.fmv_filter = gc.runtime.video_fmv_filter;
             g_title_look.spu_hq = gc.runtime.audio_spu_hq ? 1 : 0;
+            g_title_look.dithering = gc.runtime.video_dithering;
+            g_title_look.fmv_chroma = gc.runtime.video_fmv_chroma_smoothing ? 1 : 0;
             g_auto_skip_fmv    = gc.runtime.video_auto_skip_fmv ? 1 : 0;
             /* [controller] game-declared input defaults (settings.toml/launcher
              * still override below). */

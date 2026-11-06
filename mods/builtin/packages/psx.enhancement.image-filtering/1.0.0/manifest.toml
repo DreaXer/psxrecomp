@@ -97,6 +97,52 @@ label = "Sharp bilinear"
 value = "bicubic"
 label = "Bicubic"
 
+[[option]]
+feature = "image-filtering"
+id = "dithering"
+label = "Dithering"
+description = "The console's 4x4 colour dithering on shaded and texture-blended 3D. On is the console's look at any resolution, Fine scales the pattern to the internal resolution, Off is true colour (24-bit) with no pattern. OpenGL only."
+group = "Visual"
+type = "choice"
+default = "default"
+
+[[option.choice]]
+value = "default"
+label = "Game default"
+
+[[option.choice]]
+value = "on"
+label = "On (console)"
+
+[[option.choice]]
+value = "fine"
+label = "Fine (scaled)"
+
+[[option.choice]]
+value = "off"
+label = "Off (true colour)"
+
+[[option]]
+feature = "image-filtering"
+id = "fmv_chroma_smoothing"
+label = "FMV chroma smoothing"
+description = "Smooths the 2-pixel colour blocks of 24-bit full-motion videos (their colour is stored once per 2x2 pixels) without softening detail. OpenGL only."
+group = "Visual"
+type = "choice"
+default = "default"
+
+[[option.choice]]
+value = "default"
+label = "Game default"
+
+[[option.choice]]
+value = "on"
+label = "On"
+
+[[option.choice]]
+value = "off"
+label = "Off"
+
 [[plugin]]
 feature = "image-filtering"
 id = "psx.image-filtering"

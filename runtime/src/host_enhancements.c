@@ -23,11 +23,14 @@ void psx_host_enh_request_crt(int screen_kind, int scanlines, int strength_pct) 
     s_req.crt_strength_pct = strength_pct;
 }
 
-void psx_host_enh_request_image(int smoothing, int texture_filter, int fmv_filter) {
+void psx_host_enh_request_image(int smoothing, int texture_filter, int fmv_filter,
+                                int dithering, int fmv_chroma) {
     s_req.image = 1;
     s_req.image_smoothing = smoothing;
     s_req.image_texture_filter = texture_filter;
     s_req.image_fmv_filter = fmv_filter;
+    s_req.image_dithering = dithering;
+    s_req.image_fmv_chroma = fmv_chroma;
 }
 
 void psx_host_enh_request_audio(void) {
@@ -117,6 +120,14 @@ int psx_host_enh_parse_fmv_filter(const char* text) {
     if (is(text, "bilinear")) return 1;
     if (is(text, "sharp")) return 2;
     if (is(text, "bicubic")) return 3;
+    return PSX_HOST_ENH_DEFAULT;
+}
+
+/* [video] dithering encoding: off 0, on 1, fine 2. */
+int psx_host_enh_parse_dithering(const char* text) {
+    if (is(text, "off")) return 0;
+    if (is(text, "on")) return 1;
+    if (is(text, "fine")) return 2;
     return PSX_HOST_ENH_DEFAULT;
 }
 

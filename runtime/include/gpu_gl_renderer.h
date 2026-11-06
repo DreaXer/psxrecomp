@@ -447,6 +447,9 @@ void gl_renderer_fg_source(const uint32_t id[3], const int32_t pc[9], const int3
                            const int32_t x[3], const int32_t y[3]);
 int  gl_renderer_frame_generation(void);
 void gl_renderer_frame_gen_configure(double refresh_hz, double guest_hz);
+/* Cap the rate Smooth motion fills (0 = the panel's refresh): e.g. 60 makes
+ * 30 Hz content one in-between frame on any panel at or above 60 Hz. */
+void gl_renderer_frame_gen_set_max_hz(double max_hz);
 double gl_renderer_frame_gen_real_share(void);
 /* How in-between frames are made ([video] frame_generation_method,
  * docs/FRAME_GENERATION.md): redraw (default) or reprojection (opt-in). */

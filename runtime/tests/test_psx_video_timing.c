@@ -138,6 +138,20 @@ int main(void) {
         expect_u64("edges through late switch", s_edge_count, 11u);
     }
 
+    /* 5. Forced NTSC timing (enhancement): the game's PAL selection is kept
+     * but the timing stays NTSC until the force is lifted. */
+    {
+        gp1_display_mode(0x08000008u);           /* game selects PAL */
+        expect_u64("pal before force", g_psx_vblank_cycles, 677376u);
+        expect_u64("force switches", (uint64_t)psx_video_timing_force_ntsc(1), 1u);
+        expect_u64("ntsc while forced", g_psx_vblank_cycles, 564480u);
+        expect_u64("is_pal while forced", (uint64_t)psx_video_timing_is_pal(), 0u);
+        gp1_display_mode(0x08000008u);           /* PAL rewritten while forced */
+        expect_u64("still ntsc", g_psx_lines_per_frame, 263u);
+        expect_u64("lift switches", (uint64_t)psx_video_timing_force_ntsc(0), 1u);
+        expect_u64("pal again", g_psx_vblank_cycles, 677376u);
+    }
+
     if (s_failures) {
         fprintf(stderr, "%d failure(s)\n", s_failures);
         return 1;

@@ -12020,6 +12020,9 @@ typedef struct { uint32_t rec, key0, vid[3]; float x[3], y[3], p[3][3], h[3], pz
 static int       s_fg_on = 0;                 /* configured (any thread reads) */
 static int       s_fg_force = 0;              /* PSX_FRAME_GEN_FORCE: tests */
 static _Atomic double s_fg_refresh_hz = 0.0, s_fg_guest_hz = 59.94;
+/* The panel's refresh as last configured, and an optional output cap
+ * (gl_renderer_frame_gen_set_max_hz): s_fg_refresh_hz is the smaller. */
+static _Atomic double s_fg_panel_hz = 0.0, s_fg_max_hz = 0.0;
 static _Atomic int s_fg_late = 0;             /* emulation thread: a late frame */
 static const char *_Atomic s_fg_hold_reason = NULL;
 static _Atomic uint64_t s_fg_hold_until = 0;  /* rt_now_ns: no generation before */
@@ -14438,9 +14441,20 @@ double gl_renderer_frame_gen_real_share(void) {
     return share;
 }
 
+static void fg_refresh_apply(void) {
+    const double panel = atomic_load(&s_fg_panel_hz), cap = atomic_load(&s_fg_max_hz);
+    atomic_store(&s_fg_refresh_hz, cap > 0.0 && (panel <= 0.0 || cap < panel) ? cap : panel);
+}
+
 void gl_renderer_frame_gen_configure(double refresh_hz, double guest_hz) {
-    atomic_store(&s_fg_refresh_hz, refresh_hz);
+    atomic_store(&s_fg_panel_hz, refresh_hz);
+    fg_refresh_apply();
     if (guest_hz > 1.0) atomic_store(&s_fg_guest_hz, guest_hz);
+}
+
+void gl_renderer_frame_gen_set_max_hz(double max_hz) {
+    atomic_store(&s_fg_max_hz, max_hz > 0.0 ? max_hz : 0.0);
+    fg_refresh_apply();
 }
 
 /* Not a breaker trip: generation pauses while the real frames are under

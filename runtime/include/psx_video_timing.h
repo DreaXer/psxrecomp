@@ -46,6 +46,12 @@ static inline int psx_gp1_display_mode_is_pal(uint32_t word) {
 
 /* Select the video standard. Returns 1 when it changed. */
 int      psx_video_timing_set_pal(int pal);
+/* Enhancement (DuckStation's "Force NTSC timings"): keep NTSC frame timing
+ * (60 Hz VBlank, 263 lines, NTSC HBlank clock) whatever GP1(08h) selects.
+ * The GPU's own display mode, and the GPUSTAT bit the game reads, are
+ * untouched. Returns 1 when the effective standard changed. */
+int      psx_video_timing_force_ntsc(int on);
+/* The effective standard (PAL only while selected and not forced NTSC). */
 int      psx_video_timing_is_pal(void);
 /* Bumped on every change; host-side observers (pacing) compare it. */
 uint32_t psx_video_timing_generation(void);
